@@ -1,41 +1,46 @@
-params.binSize = 10000
 params.bam = "*.bam*"
-
-
+params.bs = 10000
+params.blackListFileName = ""
+params.outdir = "results"
 log.info """\
-         R N A S E Q - N F   P I P E L I N E
+         BAMCOMPARE - N F   P I P E L I N E
          ===================================
-         SRA:         : ${params.outdir}
-         outdir:      : ${params.sra}
-         kmers        : ${kmers}
+         bams         : ${params.bam}
+         outdir       : ${params.outdir}
+         binSize      : ${params.bs}
          """
          .stripIndent()
 
 
 bam_ch = Channel.fromPath(params.bam)
-whatToPlot = Channel.fromValues("scatterplot","heatmap")
+whatToPlot = Channel.from("scatterplot","heatmap")
+method = Channel.from("spearman","pearson")
+blackListFileName = Channel.fromPath(params.blackListFileName)
+
 /*
 *https://deeptools.readthedocs.io/en/develop/content/tools/multiBamSummary.html
 */
 process multiBamSummary{
 
-conda "environment.yml"
+
 cpus 16
 
 input:
   path bams from bam_ch.collect()
-
+  path blackListFileName from blackListFileName
 
 output:
-  path "results.npz" into   multiBamSummary_out
+  path "results.npz" into   multiBamSummary_out,mbs_pca_in_ch
 
 
 script:
   """
   multiBamSummary bins \
-  -r chr19 \
   --smartLabels \
-  -bs 10000000 \
+  --minMappingQuality 30 \
+  --ignoreDuplicates \
+  --blackListFileName ${params.blackListFileName} \
+  -bs $params.bs \
   -p ${task.cpus} \
   --bamfiles *.bam \
   -o results.npz
@@ -49,26 +54,52 @@ script:
 
 process plotCorrelation {
 
-conda "environment.yml"
-publishDir "results", mode: 'copy'
+
+publishDir "$params.outdir", mode: 'copy'
 
 input:
   path input from multiBamSummary_out
   each whatplot from whatToPlot
-
+  each method from method
 output:
-  path "${whatplot}_PearsonCorr_bigwigScores.png " into cor_out
+  path "*bigwigScores*" into cor_out
 
 script:
 """
 plotCorrelation \
 -in ${input} \
---corMethod pearson \
+--corMethod $method \
 --skipZeros \
---plotTitle "Pearson Correlation of Average Scores" \
+--removeOutliers \
+--plotTitle "${method} Correlation of Average Scores" \
 --whatToPlot ${whatplot} \
--o ${whatplot}_PearsonCorr_bigwigScores.png   \
---outFileCorMatrix PearsonCorr_bigwigScores.tab
+--colorMap Blues \
+-o ${whatplot}_${method}Corr_bigwigScores.png   \
+--outFileCorMatrix ${method}Corr_bigwigScores.tab
+"""
+
+}
+
+/*
+*https://deeptools.readthedocs.io/en/develop/content/tools/plotPCA.html
+*/
+
+process plotPCA {
+
+
+publishDir "$params.outdir", mode: 'copy'
+
+input:
+path input from mbs_pca_in_ch
+
+output:
+path "PCA_readCounts.png" into pca
+
+script:
+"""
+   plotPCA -in results.npz \
+  -o PCA_readCounts.png \
+  -T "PCA of read counts"
 """
 
 }
